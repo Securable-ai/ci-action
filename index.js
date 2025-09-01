@@ -9,25 +9,16 @@ async function run() {
     const serverUrl = core.getInput("server_url");
     const apiKey = core.getInput("api_key");
     const folder = core.getInput("folder");
-    const mode = core.getInput("mode");
-    const imageName = core.getInput("image_name");
 
-    const zipFile = mode === "docker" ? "docker-image.tar" : "code.zip";
+    const tarFile = "code.tar.gz";
 
-    if (mode === "docker") {
-      if (!imageName) {
-        throw new Error("image_name is required when mode=docker");
-      }
-      // save docker image
-      await exec.exec("docker", ["save", imageName, "-o", zipFile]);
-    } else {
-      // zip folder
-      await exec.exec("zip", ["-r", zipFile, folder]);
-    }
+    // 🔹 Create a tarball of the folder
+    await exec.exec("tar", ["-czf", tarFile, folder]);
 
     const form = new FormData();
-    form.append("file", fs.createReadStream(zipFile));
+    form.append("file", fs.createReadStream(tarFile));
 
+    // 🔹 Upload tarball to server
     const res = await fetch(serverUrl, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },

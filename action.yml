@@ -1,23 +1,13 @@
 name: "Codex Security CI Scan"
-description: "Upload code or docker image zip to Codex Security and fail pipeline if issues are found"
-author: "Codex Security"
+description: "Tar a folder and upload to Codex Security CI endpoint"
 inputs:
   server_url:
-    description: "Codex Security CI upload endpoint"
     required: true
     default: "https://api.codexsecurity.io/ci-code"
   api_key:
-    description: "API key for Codex Security"
     required: true
   folder:
-    description: "Path to folder to zip (source mode)"
     default: "."
-  mode:
-    description: "Scan mode: source or docker"
-    default: "source"
-  image_name:
-    description: "Docker image name (required if mode=docker)"
-    required: false
 runs:
   using: "node20"
   main: "dist/index.js"
