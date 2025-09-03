@@ -37583,13 +37583,12 @@ async function run() {
   try {
     const serverUrl = core.getInput("server_url");
     const apiKey = core.getInput("api_key");
-    const folder = core.getInput("folder");
 
-    const tarFile = "code.tar.gz";
+    const tarFile = "repo.tar.gz";
 
-    // 🔹 Create a tarball of the folder
-    await exec.exec("tar", ["-czf", tarFile, folder]);
-    core.info(`📦 Created archive: ${tarFile}`);
+    // 🔹 Archive only tracked git files at HEAD
+    await exec.exec("git", ["archive", "--format=tar.gz", "-o", tarFile, "HEAD"]);
+    core.info(`📦 Created repo archive: ${tarFile}`);
 
     const form = new form_data();
     form.append("file", external_fs_.createReadStream(tarFile));
@@ -37609,21 +37608,15 @@ async function run() {
     core.info("📋 Codex Scan Response (raw from server):");
     core.info(JSON.stringify(json, null, 2));
 
-    // ------------------------------------------------
-    // 🔹 Simulated failure (ignore server status for now)
-    // ------------------------------------------------
+    // 🔹 Simulated failure for now
     const fakeFailure = {
       status: "FAIL",
       message: "Scan failed: more than 5 critical vulnerabilities detected.",
-      criticalCount: 7,
-      highCount: 12,
-      mediumCount: 20,
     };
 
     core.info("📋 Overriding with simulated result:");
     core.info(JSON.stringify(fakeFailure, null, 2));
 
-    // 🔹 Force fail pipeline
     core.setFailed(`❌ ${fakeFailure.message}`);
   } catch (error) {
     core.setFailed(error.message);
