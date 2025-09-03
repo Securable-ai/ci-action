@@ -14,6 +14,7 @@ async function run() {
 
     // 🔹 Create a tarball of the folder
     await exec.exec("tar", ["-czf", tarFile, folder]);
+    core.info(`📦 Created archive: ${tarFile}`);
 
     const form = new FormData();
     form.append("file", fs.createReadStream(tarFile));
@@ -30,14 +31,25 @@ async function run() {
     }
 
     const json = await res.json();
-    core.info("📋 Codex Scan Response:");
+    core.info("📋 Codex Scan Response (raw from server):");
     core.info(JSON.stringify(json, null, 2));
 
-    if (json.status && json.status.toUpperCase() === "FAIL") {
-      core.setFailed("❌ Codex SCA issues found, failing pipeline.");
-    } else {
-      core.info("✅ Codex scan passed with no blocking issues.");
-    }
+    // ------------------------------------------------
+    // 🔹 Simulated failure (ignore server status for now)
+    // ------------------------------------------------
+    const fakeFailure = {
+      status: "FAIL",
+      message: "Scan failed: more than 5 critical vulnerabilities detected.",
+      criticalCount: 7,
+      highCount: 12,
+      mediumCount: 20,
+    };
+
+    core.info("📋 Overriding with simulated result:");
+    core.info(JSON.stringify(fakeFailure, null, 2));
+
+    // 🔹 Force fail pipeline
+    core.setFailed(`❌ ${fakeFailure.message}`);
   } catch (error) {
     core.setFailed(error.message);
   }
