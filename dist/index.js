@@ -37605,8 +37605,8 @@ async function run() {
     }
 
     const json = await res.json();
-    core.info("📋 Codex Scan Response (raw from server):");
-    core.info(JSON.stringify(json, null, 2));
+    // core.info("📋 Codex Scan Response (raw from server):");
+    // core.info(JSON.stringify(json, null, 2));
 
     // 🔹 Simulated failure for now
     const fakeFailure = {
@@ -37614,8 +37614,8 @@ async function run() {
       message: "Scan failed: more than 5 critical vulnerabilities detected.",
     };
 
-    core.info("📋 Overriding with simulated result:");
-    core.info(JSON.stringify(fakeFailure, null, 2));
+    // core.info("📋 Overriding with simulated result:");
+    // core.info(JSON.stringify(fakeFailure, null, 2));
 
     core.setFailed(`❌ ${fakeFailure.message}`);
   } catch (error) {
