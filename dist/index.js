@@ -37582,6 +37582,7 @@ var form_data = __nccwpck_require__(6454);
 async function run() {
   try {
     const serverUrl = core.getInput("server_url");
+    let graphqlUrl = serverUrl + (serverUrl.endsWith("/") ? "" : "/") + "graphql";
     const apiKey = core.getInput("api_key");
 
     // New inputs for mutation
@@ -37599,7 +37600,7 @@ async function run() {
     core.info(`📦 Created repo archive: ${tarFile}`);
 
     // Upload tar.gz to /upload-to-bucket to get signed_url
-    const uploadUrl = core.getInput("upload_url") || "http://localhost:4001/upload-to-bucket";
+    const uploadUrl = serverUrl + (serverUrl.endsWith("/") ? "" : "/") + "upload-to-bucket";
     const uploadApiKey = core.getInput("upload_api_key") || apiKey;
     const form = new form_data();
     form.append("file", external_fs_.createReadStream(tarFile));
@@ -37629,7 +37630,7 @@ async function run() {
     const mutation = `mutation {\n  ScheduleScan(\n    repoUrls: [\"${repoUrl}\"],\n    assetType: \"githubRepos\",\n    scanTypes: [${scanTypes.map(t => `\"${t}\"`).join(",")}],\n    code_zip: \"${codeZipUrl}\",\n    quick_scan: true,\n    via: \"web\"\n  ) {\n    message\n    status\n    data\n  }\n}`;
 
     // Send mutation to server
-    const res = await fetch(serverUrl, {
+    const res = await fetch(graphqlUrl, {
       method: "POST",
       headers: {
         "Authorization": `apikey ${apiKey}`,
