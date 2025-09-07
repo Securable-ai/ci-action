@@ -35121,7 +35121,8 @@ async function run() {
         data
       }
     }`;
-
+    core.info("📋 ScheduleScan Mutation:")
+    core.info(mutation);
     // Send mutation to server
     const res = await fetch(graphqlUrl, {
       method: "POST",
