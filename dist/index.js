@@ -37584,40 +37584,72 @@ async function run() {
     const serverUrl = core.getInput("server_url");
     const apiKey = core.getInput("api_key");
 
-    const tarFile = "repo.tar.gz";
+    // New inputs for mutation
+    const repoUrl = core.getInput("repo_url"); // single repo URL
+    const scanTypesInput = core.getInput("scan_types"); // comma-separated list
+  // Generate random tar.gz filename
+  const randomSuffix = Math.random().toString(36).substring(2, 10);
+  const tarFile = `repo-${randomSuffix}.tar.gz`;
+
+    // Parse scanTypes as array
+    const scanTypes = scanTypesInput.split(",").map(s => s.trim()).filter(Boolean);
+
+    // Archive only tracked git files at HEAD
+    await exec.exec("git", ["archive", "--format=tar.gz", "-o", tarFile, "HEAD"]);
+    core.info(`📦 Created repo archive: ${tarFile}`);
+
+    // Upload tar.gz to /upload-to-bucket to get signed_url
+    const uploadUrl = core.getInput("upload_url") || "http://localhost:4001/upload-to-bucket";
+    const uploadApiKey = core.getInput("upload_api_key") || apiKey;
+    const form = new form_data();
+    form.append("file", external_fs_.createReadStream(tarFile));
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `apikey ${uploadApiKey}`
+      },
+      body: form
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error(`Upload failed: ${uploadRes.status} ${uploadRes.statusText}`);
+    }
+    const uploadJson = await uploadRes.json();
+    const codeZipUrl = uploadJson.s3Response?.signed_url || uploadJson.fileUrl;
+    if (!codeZipUrl) {
+      throw new Error("No signed_url returned from upload");
+    }
 
     // 🔹 Archive only tracked git files at HEAD
     await exec.exec("git", ["archive", "--format=tar.gz", "-o", tarFile, "HEAD"]);
     core.info(`📦 Created repo archive: ${tarFile}`);
 
-    const form = new form_data();
-    form.append("file", external_fs_.createReadStream(tarFile));
+    // Prepare GraphQL mutation
+    const mutation = `mutation {\n  ScheduleScan(\n    repoUrls: [\"${repoUrl}\"],\n    assetType: \"githubRepos\",\n    scanTypes: [${scanTypes.map(t => `\"${t}\"`).join(",")}],\n    code_zip: \"${codeZipUrl}\",\n    quick_scan: true,\n    via: \"web\"\n  ) {\n    message\n    status\n    data\n  }\n}`;
 
-    // 🔹 Upload tarball to server
+    // Send mutation to server
     const res = await fetch(serverUrl, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
+      headers: {
+        "Authorization": `apikey ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ query: mutation })
     });
 
     if (!res.ok) {
-      throw new Error(`Upload failed: ${res.status} ${res.statusText}`);
+      throw new Error(`GraphQL request failed: ${res.status} ${res.statusText}`);
     }
 
     const json = await res.json();
-    // core.info("📋 Codex Scan Response (raw from server):");
-    // core.info(JSON.stringify(json, null, 2));
+    core.info("📋 ScheduleScan Response:");
+    core.info(JSON.stringify(json, null, 2));
 
-    // 🔹 Simulated failure for now
-    const fakeFailure = {
-      status: "FAIL",
-      message: "Scan failed: more than 5 critical vulnerabilities detected.",
-    };
-
-    // core.info("📋 Overriding with simulated result:");
-    // core.info(JSON.stringify(fakeFailure, null, 2));
-
-    core.setFailed(`❌ ${fakeFailure.message}`);
+    if (json.errors || (json.data && json.data.ScheduleScan && json.data.ScheduleScan.status !== "SUCCESS")) {
+      core.setFailed(`❌ ${json.data?.ScheduleScan?.message || "Scan failed"}`);
+    }
+    // else: success, do nothing
   } catch (error) {
     core.setFailed(error.message);
   }
