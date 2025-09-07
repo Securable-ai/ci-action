@@ -37617,6 +37617,8 @@ async function run() {
       throw new Error(`Upload failed: ${uploadRes.status} ${uploadRes.statusText}`);
     }
     const uploadJson = await uploadRes.json();
+    core.info("📋 Upload Response:");
+    core.info(JSON.stringify(uploadJson, null, 2));
     const codeZipUrl = uploadJson.s3Response?.signed_url || uploadJson.fileUrl;
     if (!codeZipUrl) {
       throw new Error("No signed_url returned from upload");
