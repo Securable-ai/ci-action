@@ -35029,7 +35029,7 @@ var undici = __nccwpck_require__(6752);
 ;// CONCATENATED MODULE: ./index.js
 
 
- 
+
 
 
 
@@ -35037,10 +35037,11 @@ var undici = __nccwpck_require__(6752);
 async function run() {
   try {
     const serverUrl = core.getInput("server_url");
-    let graphqlUrl = serverUrl + (serverUrl.endsWith("/") ? "" : "/") + "graphql";
+    const graphqlUrl =
+      serverUrl + (serverUrl.endsWith("/") ? "" : "/") + "graphql";
     const apiKey = core.getInput("api_key");
 
-    // New inputs for mutation
+    // Inputs for mutation
     const repoUrl = core.getInput("repo_url"); // single repo URL
     const scanTypesInput = core.getInput("scan_types"); // comma-separated list
     // Generate random tar.gz filename
@@ -35048,16 +35049,20 @@ async function run() {
     const tarFile = `repo-${randomSuffix}.tar.gz`;
 
     // Parse scanTypes as array
-    const scanTypes = scanTypesInput.split(",").map(s => s.trim()).filter(Boolean);
+    const scanTypes = scanTypesInput
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
 
     // Archive only tracked git files at HEAD
     await exec.exec("git", ["archive", "--format=tar.gz", "-o", tarFile, "HEAD"]);
     core.info(`📦 Created repo archive: ${tarFile}`);
 
     // Upload tar.gz to /upload-to-bucket to get signed_url
-    const uploadUrl = serverUrl + (serverUrl.endsWith("/") ? "" : "/") + "upload-to-bucket";
+    const uploadUrl =
+      serverUrl + (serverUrl.endsWith("/") ? "" : "/") + "upload-to-bucket";
     const uploadApiKey = core.getInput("upload_api_key") || apiKey;
-    // Use undici for form upload
+
     const undiciForm = new undici.FormData();
     undiciForm.append(
       "file",
@@ -35069,48 +35074,62 @@ async function run() {
     const undiciRes = await (0,undici.request)(uploadUrl, {
       method: "POST",
       headers: {
-        "Authorization": `apikey ${uploadApiKey}`
+        Authorization: `apikey ${uploadApiKey}`,
       },
-      body: undiciForm
+      body: undiciForm,
     });
 
+    // --- FIXED: read body only once ---
+    const rawText = await undiciRes.body.text();
+    core.info("📋 Upload Response (raw):");
+    core.info(rawText);
 
     let uploadJson;
-    core.info("📋 Upload Response:");
-    core.info(JSON.stringify(await undiciRes.body.text(), null, 2));
     try {
-      uploadJson = await undiciRes.body.json();
+      uploadJson = JSON.parse(rawText);
     } catch (e) {
-      const text = await undiciRes.body.text();
-      core.info("📋 Upload Response (raw):");
-      core.info(text);
-      throw new Error(`Upload failed: ${undiciRes.statusCode} ${undiciRes.statusMessage} - ${text}`);
+      throw new Error(
+        `Upload failed: ${undiciRes.statusCode} ${undiciRes.statusMessage} - ${rawText}`
+      );
     }
-    core.info("📋 Upload Response:");
-    core.info(JSON.stringify(uploadJson, null, 2));
+
     if (undiciRes.statusCode < 200 || undiciRes.statusCode >= 300) {
-      throw new Error(`Upload failed: ${undiciRes.statusCode} ${undiciRes.statusMessage} - ${JSON.stringify(uploadJson)}`);
+      throw new Error(
+        `Upload failed: ${undiciRes.statusCode} ${undiciRes.statusMessage} - ${JSON.stringify(
+          uploadJson
+        )}`
+      );
     }
+
     const codeZipUrl = uploadJson.s3Response?.signed_url || uploadJson.fileUrl;
     if (!codeZipUrl) {
       throw new Error("No signed_url returned from upload");
     }
 
-    // 🔹 Archive only tracked git files at HEAD
-    await exec.exec("git", ["archive", "--format=tar.gz", "-o", tarFile, "HEAD"]);
-    core.info(`📦 Created repo archive: ${tarFile}`);
-
     // Prepare GraphQL mutation
-    const mutation = `mutation {\n  ScheduleScan(\n    repoUrls: [\"${repoUrl}\"],\n    assetType: \"githubRepos\",\n    scanTypes: [${scanTypes.map(t => `\"${t}\"`).join(",")}],\n    code_zip: \"${codeZipUrl}\",\n    quick_scan: true,\n    via: \"web\"\n  ) {\n    message\n    status\n    data\n  }\n}`;
+    const mutation = `mutation {
+      ScheduleScan(
+        repoUrls: ["${repoUrl}"],
+        assetType: "githubRepos",
+        scanTypes: [${scanTypes.map((t) => `"${t}"`).join(",")}],
+        code_zip: "${codeZipUrl}",
+        quick_scan: true,
+        via: "web"
+      ) {
+        message
+        status
+        data
+      }
+    }`;
 
     // Send mutation to server
     const res = await fetch(graphqlUrl, {
       method: "POST",
       headers: {
-        "Authorization": `apikey ${apiKey}`,
-        "Content-Type": "application/json"
+        Authorization: `apikey ${apiKey}`,
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query: mutation })
+      body: JSON.stringify({ query: mutation }),
     });
 
     let json;
@@ -35120,15 +35139,26 @@ async function run() {
       const text = await res.text();
       core.info("📋 ScheduleScan Response (raw):");
       core.info(text);
-      throw new Error(`GraphQL request failed: ${res.status} ${res.statusText} - ${text}`);
+      throw new Error(
+        `GraphQL request failed: ${res.status} ${res.statusText} - ${text}`
+      );
     }
     core.info("📋 ScheduleScan Response:");
     core.info(JSON.stringify(json, null, 2));
 
-    if (!res.ok || json.errors || (json.data && json.data.ScheduleScan && json.data.ScheduleScan.status !== "SUCCESS")) {
-      core.setFailed(`❌ ${json.data?.ScheduleScan?.message || "Scan failed"} - ${JSON.stringify(json)}`);
+    if (
+      !res.ok ||
+      json.errors ||
+      (json.data &&
+        json.data.ScheduleScan &&
+        json.data.ScheduleScan.status !== "SUCCESS")
+    ) {
+      core.setFailed(
+        `❌ ${
+          json.data?.ScheduleScan?.message || "Scan failed"
+        } - ${JSON.stringify(json)}`
+      );
     }
-    // else: success, do nothing
   } catch (error) {
     core.setFailed(error.message);
   }
