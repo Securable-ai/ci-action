@@ -35058,6 +35058,13 @@ async function run() {
     const undiciForm = new undici.FormData();
     undiciForm.append("file", external_fs_.createReadStream(tarFile));
 
+    // Print form field details for debugging
+    core.info("Uploading file with undici FormData:");
+    for (const [key, value] of undiciForm.entries()) {
+      core.info(`Form field: ${key}, value type: ${typeof value}`);
+    }
+
+    // Do NOT set Content-Type header, undici will handle it
     const undiciRes = await (0,undici.request)(uploadUrl, {
       method: "POST",
       headers: {
