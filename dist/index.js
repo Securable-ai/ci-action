@@ -35022,12 +35022,15 @@ function fixResponseChunkedTransferBadEnding(request, errorCallback) {
 
 // EXTERNAL MODULE: external "fs"
 var external_fs_ = __nccwpck_require__(9896);
+// EXTERNAL MODULE: external "path"
+var external_path_ = __nccwpck_require__(6928);
 // EXTERNAL MODULE: ./node_modules/undici/index.js
 var undici = __nccwpck_require__(6752);
 ;// CONCATENATED MODULE: ./index.js
 
 
  
+
 
 
 
@@ -35056,15 +35059,13 @@ async function run() {
     const uploadApiKey = core.getInput("upload_api_key") || apiKey;
     // Use undici for form upload
     const undiciForm = new undici.FormData();
-    undiciForm.append("file", external_fs_.createReadStream(tarFile));
+    undiciForm.append(
+      "file",
+      new undici.File([external_fs_.readFileSync(tarFile)], external_path_.basename(tarFile), {
+        type: "application/gzip",
+      })
+    );
 
-    // Print form field details for debugging
-    core.info("Uploading file with undici FormData:");
-    for (const [key, value] of undiciForm.entries()) {
-      core.info(`Form field: ${key}, value type: ${typeof value}`);
-    }
-
-    // Do NOT set Content-Type header, undici will handle it
     const undiciRes = await (0,undici.request)(uploadUrl, {
       method: "POST",
       headers: {
@@ -35072,6 +35073,7 @@ async function run() {
       },
       body: undiciForm
     });
+
 
     let uploadJson;
     core.info("📋 Upload Response:");
