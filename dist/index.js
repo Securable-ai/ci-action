@@ -35067,6 +35067,8 @@ async function run() {
     });
 
     let uploadJson;
+    core.info("📋 Upload Response:");
+    core.info(JSON.stringify(await undiciRes.body.text(), null, 2));
     try {
       uploadJson = await undiciRes.body.json();
     } catch (e) {
