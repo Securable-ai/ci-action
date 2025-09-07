@@ -35066,12 +35066,20 @@ async function run() {
       body: undiciForm
     });
 
-    if (undiciRes.statusCode < 200 || undiciRes.statusCode >= 300) {
-      throw new Error(`Upload failed: ${undiciRes.statusCode} ${undiciRes.statusMessage}`);
+    let uploadJson;
+    try {
+      uploadJson = await undiciRes.body.json();
+    } catch (e) {
+      const text = await undiciRes.body.text();
+      core.info("📋 Upload Response (raw):");
+      core.info(text);
+      throw new Error(`Upload failed: ${undiciRes.statusCode} ${undiciRes.statusMessage} - ${text}`);
     }
-    const uploadJson = await undiciRes.body.json();
     core.info("📋 Upload Response:");
     core.info(JSON.stringify(uploadJson, null, 2));
+    if (undiciRes.statusCode < 200 || undiciRes.statusCode >= 300) {
+      throw new Error(`Upload failed: ${undiciRes.statusCode} ${undiciRes.statusMessage} - ${JSON.stringify(uploadJson)}`);
+    }
     const codeZipUrl = uploadJson.s3Response?.signed_url || uploadJson.fileUrl;
     if (!codeZipUrl) {
       throw new Error("No signed_url returned from upload");
@@ -35085,7 +35093,7 @@ async function run() {
     const mutation = `mutation {\n  ScheduleScan(\n    repoUrls: [\"${repoUrl}\"],\n    assetType: \"githubRepos\",\n    scanTypes: [${scanTypes.map(t => `\"${t}\"`).join(",")}],\n    code_zip: \"${codeZipUrl}\",\n    quick_scan: true,\n    via: \"web\"\n  ) {\n    message\n    status\n    data\n  }\n}`;
 
     // Send mutation to server
-    const res = await fetch(graphqlUrl, {
+    const res = await fetch(serverUrl, {
       method: "POST",
       headers: {
         "Authorization": `apikey ${apiKey}`,
@@ -35094,16 +35102,20 @@ async function run() {
       body: JSON.stringify({ query: mutation })
     });
 
-    if (!res.ok) {
-      throw new Error(`GraphQL request failed: ${res.status} ${res.statusText}`);
+    let json;
+    try {
+      json = await res.json();
+    } catch (e) {
+      const text = await res.text();
+      core.info("📋 ScheduleScan Response (raw):");
+      core.info(text);
+      throw new Error(`GraphQL request failed: ${res.status} ${res.statusText} - ${text}`);
     }
-
-    const json = await res.json();
     core.info("📋 ScheduleScan Response:");
     core.info(JSON.stringify(json, null, 2));
 
-    if (json.errors || (json.data && json.data.ScheduleScan && json.data.ScheduleScan.status !== "SUCCESS")) {
-      core.setFailed(`❌ ${json.data?.ScheduleScan?.message || "Scan failed"}`);
+    if (!res.ok || json.errors || (json.data && json.data.ScheduleScan && json.data.ScheduleScan.status !== "SUCCESS")) {
+      core.setFailed(`❌ ${json.data?.ScheduleScan?.message || "Scan failed"} - ${JSON.stringify(json)}`);
     }
     // else: success, do nothing
   } catch (error) {
