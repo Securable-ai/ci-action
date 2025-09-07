@@ -35040,9 +35040,9 @@ async function run() {
     // New inputs for mutation
     const repoUrl = core.getInput("repo_url"); // single repo URL
     const scanTypesInput = core.getInput("scan_types"); // comma-separated list
-  // Generate random tar.gz filename
-  const randomSuffix = Math.random().toString(36).substring(2, 10);
-  const tarFile = `repo-${randomSuffix}.tar.gz`;
+    // Generate random tar.gz filename
+    const randomSuffix = Math.random().toString(36).substring(2, 10);
+    const tarFile = `repo-${randomSuffix}.tar.gz`;
 
     // Parse scanTypes as array
     const scanTypes = scanTypesInput.split(",").map(s => s.trim()).filter(Boolean);
@@ -35093,7 +35093,7 @@ async function run() {
     const mutation = `mutation {\n  ScheduleScan(\n    repoUrls: [\"${repoUrl}\"],\n    assetType: \"githubRepos\",\n    scanTypes: [${scanTypes.map(t => `\"${t}\"`).join(",")}],\n    code_zip: \"${codeZipUrl}\",\n    quick_scan: true,\n    via: \"web\"\n  ) {\n    message\n    status\n    data\n  }\n}`;
 
     // Send mutation to server
-    const res = await fetch(serverUrl, {
+    const res = await fetch(graphqlUrl, {
       method: "POST",
       headers: {
         "Authorization": `apikey ${apiKey}`,
