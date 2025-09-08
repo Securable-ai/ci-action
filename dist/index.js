@@ -35145,7 +35145,7 @@ async function run() {
       const jobQuery = `{
         getJobDetail(jobId: "${jobId}") {
           status
-          data { status progress }
+          data
         }
       }`;
 
@@ -35179,7 +35179,7 @@ async function run() {
       checkJobPolicy(jobId: "${jobId}") {
         message
         status
-        data { denied warnings }
+        data
       }
     }`;
 
