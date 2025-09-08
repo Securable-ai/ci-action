@@ -35052,7 +35052,7 @@ async function run() {
       .filter(Boolean);
 
     // Create archive of tracked git files
-    await exec.exec("git", ["archive", "--format=tar.gz", "-o", tarFile, "HEAD"]);
+    await exec.exec("tar", ["-czf", tarFile, "."]);
     core.info(`📦 Created repo archive: ${tarFile}`);
 
     // Upload to /upload-to-bucket
@@ -35113,9 +35113,6 @@ async function run() {
     });
 
     const scheduleJson = await res.json();
-    core.info("📋 ScheduleScan Response:");
-    core.info(JSON.stringify(scheduleJson, null, 2));
-
     const scanResult = Array.isArray(scheduleJson.data?.ScheduleScan)
       ? scheduleJson.data.ScheduleScan[0]
       : scheduleJson.data?.ScheduleScan;
