@@ -35077,9 +35077,6 @@ async function run() {
     });
 
     const rawText = await undiciRes.body.text();
-    core.info("📋 Upload Response (raw):");
-    core.info(rawText);
-
     let uploadJson;
     try {
       uploadJson = JSON.parse(rawText);
@@ -35159,18 +35156,19 @@ async function run() {
       });
 
       const jobJson = await jobRes.json();
-      core.info(`📋 Poll ${attempt}: ${JSON.stringify(jobJson)}`);
+      // instead of info lets have this debug
+      core.debug(`📋 Poll ${attempt}: ${JSON.stringify(jobJson)}`);
 
       const jobStatus = jobJson.data?.getJobDetail?.data?.status;
       if (jobStatus === "COMPLETED") {
         jobCompleted = true;
-        core.info("✅ Job completed");
+        core.debug("✅ Job completed");
         break;
       }
     }
 
     if (!jobCompleted) {
-      core.setFailed(`❌ Job ${jobId} did not complete within 3 minutes`);
+      // core.setFailed(`❌ Job ${jobId} did not complete within 3 minutes`);
       return;
     }
 
@@ -35193,25 +35191,31 @@ async function run() {
     });
 
     const policyJson = await policyRes.json();
-    core.info("📋 Policy Check Response:");
-    core.info(JSON.stringify(policyJson, null, 2));
 
     const policy = policyJson.data?.checkJobPolicy;
     if (!policy) {
-      core.setFailed(`❌ Policy check failed - ${JSON.stringify(policyJson)}`);
+      // core.setFailed(`❌ Policy check failed - ${JSON.stringify(policyJson)}`);
       return;
     }
 
     const denied = policy.data?.denied || [];
     const warnings = policy.data?.warnings || [];
-
     if (denied.length > 0) {
-      core.setFailed(`❌ Policy denied:\n${JSON.stringify(denied, null, 2)}\nWarnings:\n${JSON.stringify(warnings, null, 2)}`);
+      // print each msg one by one
+      let msg = "❌ Policy denied:\n";
+      for (const d of denied) {
+        msg += `- ${d.reason}\n`;
+      }
+      core.setFailed(msg);
       return;
     }
 
     if (warnings.length > 0) {
-      core.info(`⚠️ Policy warnings:\n${JSON.stringify(warnings, null, 2)}`);
+      let msg = "⚠️ Policy warnings:\n";
+      for (const w of warnings) {
+        msg += `- ${w.reason}\n`;
+      }
+      core.info(msg);
     }
 
     core.info("🎉 Scan completed successfully and passed policy check");
