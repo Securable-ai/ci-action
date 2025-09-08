@@ -3,11 +3,18 @@ description: "Tar a folder and upload to Codex Security CI endpoint"
 inputs:
   server_url:
     required: true
-    default: "https://api.codexsecurity.io/ci-code"
+    default: "https://api.codexsecurity.io"
   api_key:
     required: true
   folder:
     default: "."
+  repo_url:
+    required: true
+    description: "Repository URL to scan"
+  scan_types:
+    required: true
+    description: "Comma-separated scan types (SAST,SCA,SECRET,DATA_SECURITY)"
+
 runs:
   using: "node20"
   main: "dist/index.js"
