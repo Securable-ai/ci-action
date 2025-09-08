@@ -35041,24 +35041,21 @@ async function run() {
       serverUrl + (serverUrl.endsWith("/") ? "" : "/") + "graphql";
     const apiKey = core.getInput("api_key");
 
-    // Inputs for mutation
-    const repoUrl = core.getInput("repo_url"); // single repo URL
-    const scanTypesInput = core.getInput("scan_types"); // comma-separated list
-    // Generate random tar.gz filename
+    const repoUrl = core.getInput("repo_url");
+    const scanTypesInput = core.getInput("scan_types");
     const randomSuffix = Math.random().toString(36).substring(2, 10);
     const tarFile = `repo-${randomSuffix}.tar.gz`;
 
-    // Parse scanTypes as array
     const scanTypes = scanTypesInput
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
 
-    // Archive only tracked git files at HEAD
+    // Create archive of tracked git files
     await exec.exec("git", ["archive", "--format=tar.gz", "-o", tarFile, "HEAD"]);
     core.info(`📦 Created repo archive: ${tarFile}`);
 
-    // Upload tar.gz to /upload-to-bucket to get signed_url
+    // Upload to /upload-to-bucket
     const uploadUrl =
       serverUrl + (serverUrl.endsWith("/") ? "" : "/") + "upload-to-bucket";
     const uploadApiKey = core.getInput("upload_api_key") || apiKey;
@@ -35079,7 +35076,6 @@ async function run() {
       body: undiciForm,
     });
 
-    // --- FIXED: read body only once ---
     const rawText = await undiciRes.body.text();
     core.info("📋 Upload Response (raw):");
     core.info(rawText);
@@ -35088,25 +35084,13 @@ async function run() {
     try {
       uploadJson = JSON.parse(rawText);
     } catch (e) {
-      throw new Error(
-        `Upload failed: ${undiciRes.statusCode} ${undiciRes.statusMessage} - ${rawText}`
-      );
-    }
-
-    if (undiciRes.statusCode < 200 || undiciRes.statusCode >= 300) {
-      throw new Error(
-        `Upload failed: ${undiciRes.statusCode} ${undiciRes.statusMessage} - ${JSON.stringify(
-          uploadJson
-        )}`
-      );
+      throw new Error(`Upload failed: ${undiciRes.statusCode} - ${rawText}`);
     }
 
     const codeZipUrl = uploadJson.s3Response?.signed_url || uploadJson.fileUrl;
-    if (!codeZipUrl) {
-      throw new Error("No signed_url returned from upload");
-    }
+    if (!codeZipUrl) throw new Error("No signed_url returned from upload");
 
-    // Prepare GraphQL mutation
+    // Schedule scan
     const mutation = `mutation {
       ScheduleScan(
         repoUrls: ["${repoUrl}"],
@@ -35121,9 +35105,7 @@ async function run() {
         data
       }
     }`;
-    core.info("📋 ScheduleScan Mutation:")
-    core.info(mutation);
-    // Send mutation to server
+
     const res = await fetch(graphqlUrl, {
       method: "POST",
       headers: {
@@ -35133,29 +35115,106 @@ async function run() {
       body: JSON.stringify({ query: mutation }),
     });
 
-    let json;
-    try {
-      json = await res.json();
-    } catch (e) {
-      const text = await res.text();
-      core.info("📋 ScheduleScan Response (raw):");
-      core.info(text);
-      throw new Error(
-        `GraphQL request failed: ${res.status} ${res.statusText} - ${text}`
-      );
-    }
+    const scheduleJson = await res.json();
     core.info("📋 ScheduleScan Response:");
-    core.info(JSON.stringify(json, null, 2));
+    core.info(JSON.stringify(scheduleJson, null, 2));
 
-    const scanResult = Array.isArray(json.data?.ScheduleScan)
-    ? json.data.ScheduleScan[0]
-    : json.data?.ScheduleScan;
+    const scanResult = Array.isArray(scheduleJson.data?.ScheduleScan)
+      ? scheduleJson.data.ScheduleScan[0]
+      : scheduleJson.data?.ScheduleScan;
 
-  if (!res.ok || json.errors || !scanResult || scanResult.status !== "success") {
-    core.setFailed(
-      `❌ ${scanResult?.message || "Scan failed"} - ${JSON.stringify(json)}`
-    );
-  }
+    if (!scanResult || scanResult.status !== "success") {
+      core.setFailed(`❌ Scan scheduling failed - ${JSON.stringify(scheduleJson)}`);
+      return;
+    }
+
+    const jobId = scanResult.data?._id;
+    if (!jobId) throw new Error("No jobId returned from ScheduleScan");
+
+    core.info(`🕒 Polling job ${jobId} status for 3 minutes...`);
+
+    // Poll job status
+    const maxAttempts = 60; // 3 min at 3s interval
+    let attempt = 0;
+    let jobCompleted = false;
+
+    while (attempt < maxAttempts) {
+      attempt++;
+      await new Promise((r) => setTimeout(r, 3000));
+
+      const jobQuery = `{
+        getJobDetail(jobId: "${jobId}") {
+          status
+          data { status progress }
+        }
+      }`;
+
+      const jobRes = await fetch(graphqlUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `apikey ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query: jobQuery }),
+      });
+
+      const jobJson = await jobRes.json();
+      core.info(`📋 Poll ${attempt}: ${JSON.stringify(jobJson)}`);
+
+      const jobStatus = jobJson.data?.getJobDetail?.data?.status;
+      if (jobStatus === "COMPLETED") {
+        jobCompleted = true;
+        core.info("✅ Job completed");
+        break;
+      }
+    }
+
+    if (!jobCompleted) {
+      core.setFailed(`❌ Job ${jobId} did not complete within 3 minutes`);
+      return;
+    }
+
+    // Check policy
+    const policyQuery = `{
+      checkJobPolicy(jobId: "${jobId}") {
+        message
+        status
+        data { denied warnings }
+      }
+    }`;
+
+    const policyRes = await fetch(graphqlUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `apikey ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: policyQuery }),
+    });
+
+    const policyJson = await policyRes.json();
+    core.info("📋 Policy Check Response:");
+    core.info(JSON.stringify(policyJson, null, 2));
+
+    const policy = policyJson.data?.checkJobPolicy;
+    if (!policy) {
+      core.setFailed(`❌ Policy check failed - ${JSON.stringify(policyJson)}`);
+      return;
+    }
+
+    const denied = policy.data?.denied || [];
+    const warnings = policy.data?.warnings || [];
+
+    if (denied.length > 0) {
+      core.setFailed(`❌ Policy denied:\n${JSON.stringify(denied, null, 2)}\nWarnings:\n${JSON.stringify(warnings, null, 2)}`);
+      return;
+    }
+
+    if (warnings.length > 0) {
+      core.info(`⚠️ Policy warnings:\n${JSON.stringify(warnings, null, 2)}`);
+    }
+
+    core.info("🎉 Scan completed successfully and passed policy check");
 
   } catch (error) {
     core.setFailed(error.message);
