@@ -27452,11 +27452,9 @@ async function run() {
     const form = new undici__WEBPACK_IMPORTED_MODULE_4__.FormData();
     const fileBuffer = fs__WEBPACK_IMPORTED_MODULE_2__.readFileSync(tarFile);
     form.append("file", new undici__WEBPACK_IMPORTED_MODULE_4__.File([fileBuffer], tarFile));
-    form.append("repo_url", repoUrl);
-    form.append("scan_types", scanTypes);
 
     // 🔹 Upload tarball
-    const uploadRes = await (0,undici__WEBPACK_IMPORTED_MODULE_4__.request)(`${serverUrl}/ci/upload`, {
+    const uploadRes = await (0,undici__WEBPACK_IMPORTED_MODULE_4__.request)(`${serverUrl}/upload-to-bucket`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
