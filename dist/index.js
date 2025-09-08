@@ -35053,12 +35053,14 @@ async function run() {
 
     // Create archive of tracked git files
     await exec.exec("tar", [
+      "--ignore-failed-read",
       "--exclude",
       tarFile,
       "-czf",
       tarFile,
       ".",
     ]);
+
 
 
 
