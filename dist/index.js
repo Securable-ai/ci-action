@@ -35147,19 +35147,16 @@ async function run() {
     core.info("📋 ScheduleScan Response:");
     core.info(JSON.stringify(json, null, 2));
 
-    if (
-      !res.ok ||
-      json.errors ||
-      (json.data &&
-        json.data.ScheduleScan &&
-        json.data.ScheduleScan.status != "success")
-    ) {
-      core.setFailed(
-        `❌ ${
-          json.data?.ScheduleScan?.message || "Scan failed"
-        } - ${JSON.stringify(json)}`
-      );
-    }
+    const scanResult = Array.isArray(json.data?.ScheduleScan)
+    ? json.data.ScheduleScan[0]
+    : json.data?.ScheduleScan;
+
+  if (!res.ok || json.errors || !scanResult || scanResult.status !== "success") {
+    core.setFailed(
+      `❌ ${scanResult?.message || "Scan failed"} - ${JSON.stringify(json)}`
+    );
+  }
+
   } catch (error) {
     core.setFailed(error.message);
   }
