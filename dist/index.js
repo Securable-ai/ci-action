@@ -35052,12 +35052,14 @@ async function run() {
       .filter(Boolean);
 
     // Create archive of tracked git files
-      await exec.exec("tar", [
-        "--warning=no-file-changed",
-        "-czf",
-        tarFile,
-        ".",
+    await exec.exec("tar", [
+      "-czf",
+      tarFile,
+      "-C",
+      "..",
+      external_path_.basename(process.cwd()),
     ]);
+
 
     core.info(`📦 Created repo archive: ${tarFile}`);
 
