@@ -1,19 +1,52 @@
-name: "Codex Security CI Scan"
-description: "Tar a folder and upload to Codex Security CI endpoint"
+name: "O3 Security CI Scan"
+description: "Scan a repository or a built container image with O3 Security and gate the pipeline on policy violations"
 inputs:
   server_url:
     required: true
-    default: "https://api.codexsecurity.io"
+    default: "https://api.o3.security"
+    description: "O3 Security API base URL"
   api_key:
     required: true
-  folder:
-    default: "."
+    description: "O3 Security API key — pass via secrets, never inline"
+  mode:
+    required: false
+    default: "source"
+    description: "Scan mode: 'source' (default) or 'docker'. Use 'docker' with image_name to scan a locally built image before pushing it."
+  image_name:
+    required: false
+    description: "Locally built image to scan, e.g. my-app:${{ github.sha }}. Required when mode=docker. Exported with `docker save` and uploaded — no registry push needed."
   repo_url:
-    required: true
-    description: "Repository URL to scan"
+    required: false
+    description: "Repository URL to scan (source scan). Mutually exclusive with image_uri."
+  image_uri:
+    required: false
+    description: "Container image reference to scan, e.g. asia-south1-docker.pkg.dev/proj/repo/app:tag. Takes precedence over repo_url."
+  registry_id:
+    required: false
+    description: "O3 container-registry connection id, for images in a private registry"
   scan_types:
     required: true
-    description: "Comma-separated scan types (SAST,SCA,SECRET,DATA_SECURITY)"
+    description: "Comma-separated scan types (SAST,SCA,SECRET). Container images support SCA and SECRET."
+  folder:
+    required: false
+    default: "."
+    description: "Reserved; the source scan archives the git HEAD of the checked-out repo."
+  fail_on_policy:
+    required: false
+    default: "true"
+    description: "Fail the build when the policy gate denies. Set false to report without blocking."
+  timeout_minutes:
+    required: false
+    default: "20"
+    description: "How long to wait for the scan to finish before failing the step"
+
+outputs:
+  job_id:
+    description: "The O3 scan job id"
+  policy_status:
+    description: "PASS, FAIL, or NOT_EVALUATED"
+  denied_count:
+    description: "Number of blocking policy violations"
 
 runs:
   using: "node20"
