@@ -14,7 +14,7 @@ inputs:
     description: "Scan mode: 'source' (default) or 'docker'. Use 'docker' with image_name to scan a locally built image before pushing it."
   image_name:
     required: false
-    description: "Locally built image to scan, e.g. my-app:${{ github.sha }}. Required when mode=docker. Exported with `docker save` and uploaded — no registry push needed."
+    description: "Locally built image to scan, e.g. my-app:abc1234. Required when mode=docker. Exported with `docker save` and uploaded — no registry push needed."
   repo_url:
     required: false
     description: "Repository URL to scan (source scan). Mutually exclusive with image_uri."
