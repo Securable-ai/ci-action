@@ -1,5 +1,5 @@
-name: "O3 Security CI Scan"
-description: "Scan a repository or a built container image with O3 Security and gate the pipeline on policy violations"
+name: "Gate Image"
+description: "Block a vulnerable container image before it is pushed — SCA + secrets, scanned in your runner"
 inputs:
   server_url:
     required: true

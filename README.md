@@ -1,97 +1,107 @@
-# O3 Security CI Action
+# gate-image
 
-Scans a repository or a built container image with O3 Security and fails the
-pipeline when the org's policy gate denies.
+Block a vulnerable container image **before it is pushed**.
 
-## Usage
-
-### Gate a Docker image before pushing to GAR / Docker Hub
-
-Build locally, scan, and only push if the gate passes. Because the image is
-scanned before the `push` step, a denied policy stops the artifact from ever
-reaching the registry.
+Scans the image your job just built — in the runner, straight from the local Docker daemon — and
+fails the build if it violates your security policy. Nothing is pushed and nothing is uploaded, so
+a bad image never reaches a registry in the first place.
 
 ```yaml
-name: Build, Scan, Push
-
-on:
-  pull_request:
-  push:
-    branches: [ main ]
-
-permissions:
-  contents: read
-  id-token: write   # for keyless auth to GAR
-
-jobs:
-  build-scan-push:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # 1. Source-level gate — dependencies, code, secrets.
-      - name: Scan source
-        uses: o3security/ci-action@main
-        with:
-          server_url: https://api.o3.security
-          api_key: ${{ secrets.O3_API_KEY }}
-          repo_url: https://github.com/${{ github.repository }}.git
-          scan_types: SCA,SAST,SECRET
-
       - name: Build image
-        run: docker build -t "$IMAGE" .
-        env:
-          IMAGE: asia-south1-docker.pkg.dev/my-project/my-repo/app:${{ github.sha }}
+        run: docker build -t my-app:${{ github.sha }} .
 
-      # 2. Image gate — OS packages and secrets baked into the layers.
-      #    The platform pulls the image, so it must be reachable: push to a
-      #    staging tag first, or scan from a registry O3 has a connection to.
-      - name: Scan image
-        uses: o3security/ci-action@main
+      - name: Gate the image
+        uses: o3security/gate-image@main
         with:
-          server_url: https://api.o3.security
           api_key: ${{ secrets.O3_API_KEY }}
-          image_uri: asia-south1-docker.pkg.dev/my-project/my-repo/app:${{ github.sha }}
-          registry_id: ${{ secrets.O3_REGISTRY_ID }}
+          image_name: my-app:${{ github.sha }}
           scan_types: SCA,SECRET
 
-      # 3. Only reached when both gates pass.
+      # Only reached when the gate passes.
       - name: Push image
-        run: docker push "$IMAGE"
-        env:
-          IMAGE: asia-south1-docker.pkg.dev/my-project/my-repo/app:${{ github.sha }}
+        run: docker push my-app:${{ github.sha }}
 ```
+
+## Why a gate, not a scanner
+
+Most tools scan and print. This one **decides**: findings are evaluated against your policy
+server-side, and the verdict fails the step, so `docker push` never runs. The same evaluation
+backs pull-request checks and the dashboard — a build that fails in CI shows the same reasons in
+the console.
+
+## What it finds
+
+**Software composition**
+
+- OS packages — apk, dpkg, rpm databases inside the image
+- Application dependencies — npm, PyPI, Go, Maven, RubyGems, resolved from manifests **inside the
+  image**. A registry-style image scan reads only OS databases, so a vulnerable `node_modules` is
+  invisible to it.
+- EOL distro CVEs from O3's own vulnerability database, for distributions upstream sources no
+  longer publish advisories for
+
+Enriched exactly as a server-side scan: CVE detail, CVSS severity, EPSS probability, known
+exploits, fixed versions.
+
+**Secrets**
+
+Credentials baked into the image's layers — copied in by a `COPY`, written by a `RUN`, or
+inherited from a base image. Your organisation's custom and disabled secret rules apply.
+
+## Speed
+
+Measured on an 877 MB `node:12`-based image, `ubuntu-latest`:
+
+| | |
+|---|---|
+| Scanner download (~30 MB) | ~1s |
+| Scan (SCA + secrets) | ~64s |
+| **Whole job**, including `docker build` | **~109s** |
+
+The scan engine ships as a ~4.9 GB image server-side; this runs the same engine from a ~30 MB
+bundle, so a runner can fetch it in about a second.
 
 ## Inputs
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `server_url` | yes | `https://api.o3.security` | API base URL |
-| `api_key` | yes | — | API key. **Always pass via `secrets`.** |
-| `repo_url` | one of | — | Repo to scan (source scan) |
-| `image_uri` | one of | — | Image to scan. Takes precedence over `repo_url`. |
-| `registry_id` | no | — | O3 registry-connection id for private images |
-| `scan_types` | yes | — | `SAST`, `SCA`, `SECRET` (comma-separated). Images support `SCA`, `SECRET`. |
-| `fail_on_policy` | no | `true` | Set `false` to report without blocking |
-| `timeout_minutes` | no | `20` | Wait time before the step fails |
+| `api_key` | yes | — | O3 API key. Always via `secrets`. |
+| `image_name` | one of | — | Image built by this job — scanned in the runner. |
+| `image_uri` | one of | — | Image already in a registry; the platform pulls it. |
+| `repo_url` | one of | — | Source tree; scanned on the platform (supports SAST). |
+| `scan_types` | yes | — | `SCA`, `SECRET`, `SAST` (source only). |
+| `server_url` | no | `https://api.o3.security` | API base URL. |
+| `fail_on_policy` | no | `true` | `false` reports without blocking. |
+| `registry_id` | no | — | Registry connection id, for a private `image_uri`. |
+| `timeout_minutes` | no | `20` | Upper bound before the step fails. |
+
+One input selects what gets scanned — there is no mode to set.
 
 ## Outputs
 
 | Output | Description |
 |---|---|
-| `job_id` | Scan job id |
-| `policy_status` | `PASS`, `FAIL`, or `NOT_EVALUATED` |
+| `job_id` | Scan job id — links to the finding in the console |
+| `policy_status` | `PASS`, `FAIL`, `NOT_EVALUATED` |
 | `denied_count` | Number of blocking violations |
 
-## Notes
+`NOT_EVALUATED` means no policy is configured for the namespace — surfaced as a warning, because a
+green build with nothing enforced is not the same as a clean one.
 
-- **A policy must exist** for the project's namespace, otherwise nothing is
-  enforced. The action emits a warning and sets `policy_status: NOT_EVALUATED`
-  so this doesn't look like a pass.
-- The source scan uploads `git archive HEAD`, so only committed files are
-  scanned — uncommitted working-tree changes are not.
-- The step fails if the scan times out or ends in a non-terminal state, rather
-  than letting an unknown verdict green the build.
+## Requirements
+
+Docker on the runner (already present on GitHub-hosted runners) and outbound HTTPS to
+`storage.googleapis.com` for the scanner bundle and `api.o3.security` for the verdict.
+
+Nothing about the image leaves the runner — no layers, no filesystem. What travels to the API is
+finding metadata: package names and versions, CVE ids, and the path plus rule id of a matched
+secret.
+
+`linux/amd64` and `linux/arm64` are both supported; the architecture is detected automatically.
+
+## Documentation
+
+[docs.o3.security/docs/image-security](https://docs.o3.security/docs/image-security/overview)
 
 ## Development
 
@@ -100,5 +110,5 @@ npm install
 npm run build      # bundles index.js -> dist/index.js via ncc
 ```
 
-`dist/` is committed and is what the runner executes — rebuild and commit it
-with any source change.
+`dist/` is committed and is what the runner executes — rebuild and commit it with any source
+change.
