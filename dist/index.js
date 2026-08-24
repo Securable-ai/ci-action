@@ -55432,6 +55432,14 @@ async function ensureScanner() {
     if (!fs__WEBPACK_IMPORTED_MODULE_2__.existsSync(p)) throw new Error(`Scanner bundle is missing ${tool}`);
     fs__WEBPACK_IMPORTED_MODULE_2__.chmodSync(p, 0o755);
   }
+  // The secret rules the engine starts from. It resolves them under CODEX_HOME,
+  // which defaults to /var/codex — a path that exists in the scanner image but
+  // not in a CI runner. Without the file the secret pass reads no baseline and
+  // reports zero findings while still looking successful, so treat it as
+  // missing-artifact rather than scanning with nothing.
+  if (!fs__WEBPACK_IMPORTED_MODULE_2__.existsSync(path__WEBPACK_IMPORTED_MODULE_3__.join(dir, "secret_config.toml"))) {
+    throw new Error("Scanner bundle is missing secret_config.toml");
+  }
   _actions_core__WEBPACK_IMPORTED_MODULE_0__.info("Scanner ready: o3-ci, osv-scanner, gitleaks");
   return dir;
 }
@@ -55557,7 +55565,15 @@ async function run() {
         "--scan-types", scanTypes.join(","),
         ...(process.env.GITHUB_REF_NAME ? ["--branch", process.env.GITHUB_REF_NAME] : []),
         ...(process.env.GITHUB_SHA ? ["--commit-sha", process.env.GITHUB_SHA] : []),
-      ], { env: { ...process.env, PATH: `${scannerDir}:${process.env.PATH}` } });
+      ], {
+        env: {
+          ...process.env,
+          PATH: `${scannerDir}:${process.env.PATH}`,
+          // Where the engine looks for secret_config.toml and its other rule
+          // assets; the bundle is this run's CODEX_HOME.
+          CODEX_HOME: scannerDir,
+        },
+      });
 
       return await gate(graphqlUrl, apiKey, jobId, failOnPolicy);
     } else if (imageUri) {
