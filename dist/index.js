@@ -55308,7 +55308,7 @@ async function graphql(graphqlUrl, apiKey, query, variables) {
  * on-prem takes a multipart POST. Older builds have neither, so a 404 falls
  * back to the direct flow rather than failing the run.
  */
-async function uploadArchive(serverUrl, apiKey, tarFile) {
+async function uploadArchive(serverUrl, apiKey, tarFile, contentType = "application/gzip") {
   const auth = { Authorization: `apikey ${apiKey}` };
   const bytes = fs__WEBPACK_IMPORTED_MODULE_2__.readFileSync(tarFile);
   const filename = path__WEBPACK_IMPORTED_MODULE_3__.basename(tarFile);
@@ -55331,7 +55331,7 @@ async function uploadArchive(serverUrl, apiKey, tarFile) {
     const presign = await (0,undici__WEBPACK_IMPORTED_MODULE_4__/* .request */ .Em)(joinUrl(serverUrl, "upload/presign"), {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify({ filename, contentType: "application/gzip" }),
+      body: JSON.stringify({ filename, contentType }),
     });
     const presignRaw = await presign.body.text();
     if (presign.statusCode < 200 || presign.statusCode >= 300) {
@@ -55342,7 +55342,7 @@ async function uploadArchive(serverUrl, apiKey, tarFile) {
 
     const put = await (0,undici__WEBPACK_IMPORTED_MODULE_4__/* .request */ .Em)(uploadUrl, {
       method: "PUT",
-      headers: { "Content-Type": "application/gzip" },
+      headers: { "Content-Type": contentType },
       body: bytes,
     });
     await put.body.text();
@@ -55353,7 +55353,7 @@ async function uploadArchive(serverUrl, apiKey, tarFile) {
   }
 
   const form = new FormData();
-  form.append("file", new Blob([bytes], { type: "application/gzip" }), filename);
+  form.append("file", new Blob([bytes], { type: contentType }), filename);
   const res = await (0,undici__WEBPACK_IMPORTED_MODULE_4__/* .request */ .Em)(joinUrl(serverUrl, "upload"), {
     method: "POST",
     headers: auth,
@@ -55400,6 +55400,8 @@ async function run() {
     const repoUrl = _actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput("repo_url");
     const imageUri = _actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput("image_uri");
     const registryId = _actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput("registry_id");
+    const mode = (_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput("mode") || "source").toLowerCase();
+    const imageName = _actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput("image_name");
     const failOnPolicy = _actions_core__WEBPACK_IMPORTED_MODULE_0__.getBooleanInput("fail_on_policy");
     const timeoutMs = Number(_actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput("timeout_minutes") || 20) * 60 * 1000;
 
@@ -55411,7 +55413,45 @@ async function run() {
 
     let jobId;
 
-    if (imageUri) {
+    if (mode === "docker") {
+      // Gate an image BEFORE it is pushed. The image was just built on this
+      // runner, so there is no registry reference to scan — `docker save` exports
+      // it to a tarball and we upload that. Same archive format the platform's
+      // own registry path produces, so the scan itself is identical.
+      if (!imageName) throw new Error('image_name is required when mode=docker');
+
+      const tarFile = `docker-image-${Math.random().toString(36).slice(2, 10)}.tar`;
+      _actions_core__WEBPACK_IMPORTED_MODULE_0__.info(`Exporting image ${imageName}…`);
+      await _actions_exec__WEBPACK_IMPORTED_MODULE_1__.exec("docker", ["save", imageName, "-o", tarFile]);
+      const sizeMb = (fs__WEBPACK_IMPORTED_MODULE_2__.statSync(tarFile).size / 1024 / 1024).toFixed(1);
+      _actions_core__WEBPACK_IMPORTED_MODULE_0__.info(`Exported ${tarFile} (${sizeMb} MB)`);
+
+      const archiveUrl = await uploadArchive(serverUrl, apiKey, tarFile, "application/x-tar");
+      fs__WEBPACK_IMPORTED_MODULE_2__.unlinkSync(tarFile);
+
+      const mutation = `mutation($image_uri: String, $image_archive: String, $scanTypes: [String!]) {
+        ScheduleScan(
+          repoUrls: [],
+          assetType: "containerImage",
+          image_uri: $image_uri,
+          image_archive: $image_archive,
+          scanTypes: $scanTypes,
+          via: "cli"
+        ) { message status data }
+      }`;
+      const data = await graphql(graphqlUrl, apiKey, mutation, {
+        image_uri: imageName,
+        image_archive: archiveUrl,
+        scanTypes,
+      });
+      const result = Array.isArray(data?.ScheduleScan) ? data.ScheduleScan[0] : data?.ScheduleScan;
+      if (result?.status !== "success") {
+        throw new Error(`Failed to schedule image scan: ${JSON.stringify(result)}`);
+      }
+      // This branch returns the job id as a bare string; the source path returns
+      // an object. Accept both so one reader works for either.
+      jobId = typeof result.data === "string" ? result.data : result.data?._id;
+    } else if (imageUri) {
       // Container-image scan: the registry is the source of truth, so there are
       // no bytes to upload — the platform pulls the image itself.
       _actions_core__WEBPACK_IMPORTED_MODULE_0__.info(`Scheduling container image scan: ${imageUri}`);
