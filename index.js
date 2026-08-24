@@ -231,8 +231,15 @@ async function run() {
     const repoUrl = core.getInput("repo_url");
     const imageUri = core.getInput("image_uri");
     const registryId = core.getInput("registry_id");
-    const mode = (core.getInput("mode") || "source").toLowerCase();
     const imageName = core.getInput("image_name");
+    // `mode` is a legacy selector: image_name already says "an image in this
+    // runner", so the two could disagree. Kept working for existing workflows,
+    // but the input alone decides the path — same as image_uri and repo_url.
+    const mode = (core.getInput("mode") || "").toLowerCase();
+    if (mode && mode !== "source" && mode !== "docker") {
+      throw new Error(`Unknown mode '${mode}'. Set image_name, image_uri or repo_url instead.`);
+    }
+    const scanLocalImage = Boolean(imageName) || mode === "docker";
     const failOnPolicy = core.getBooleanInput("fail_on_policy");
     const timeoutMs = Number(core.getInput("timeout_minutes") || 20) * 60 * 1000;
 
@@ -245,13 +252,13 @@ async function run() {
 
     let jobId;
 
-    if (mode === "docker") {
+    if (scanLocalImage) {
       // Gate an image BEFORE it is pushed: it exists only in this runner's Docker
       // daemon, so there is nothing to pull and nothing worth uploading. Scan it
       // here with o3-ci — the same engine the platform runs server-side, built
       // small enough to download — and report against a job so the policy gate
       // decides in one place.
-      if (!imageName) throw new Error("image_name is required when mode=docker");
+      if (!imageName) throw new Error("image_name is required to scan a locally built image");
 
       const mutation = `mutation($image_uri: String, $scanTypes: [String!]) {
         ScheduleScan(

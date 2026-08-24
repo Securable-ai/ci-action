@@ -8,13 +8,12 @@ inputs:
   api_key:
     required: true
     description: "O3 Security API key — pass via secrets, never inline"
-  mode:
-    required: false
-    default: "source"
-    description: "Scan mode: 'source' (default) or 'docker'. Use 'docker' with image_name to scan a locally built image before pushing it."
   image_name:
     required: false
-    description: "Locally built image to scan, e.g. my-app:abc1234. Required when mode=docker. Exported with `docker save` and uploaded — no registry push needed."
+    description: "Image built by this job, e.g. my-app:abc1234. Scanned in the runner from the local Docker daemon — nothing is pushed or uploaded."
+  mode:
+    required: false
+    description: "Deprecated. image_name alone selects a local-image scan; this is accepted only so existing workflows keep working."
   repo_url:
     required: false
     description: "Repository URL to scan (source scan). Mutually exclusive with image_uri."
