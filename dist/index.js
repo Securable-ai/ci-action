@@ -55392,6 +55392,99 @@ async function waitForJob(graphqlUrl, apiKey, jobId, timeoutMs) {
   return { completed: false, status: lastStatus, timedOut: true };
 }
 
+// Public GCS, not the GitHub release: o3-ci is a private repo, so a customer's
+// runner gets a 404 from its releases. This bucket is world-readable, so the
+// download needs no credentials.
+const SCANNER_RELEASE = "https://storage.googleapis.com/o3-releases/o3-ci/latest";
+
+/**
+ * Download and unpack the scan bundle, returning the directory holding it.
+ *
+ * The bundle carries o3-ci plus the two tools the engine shells out to —
+ * osv-scanner and gitleaks — so a runner needs nothing preinstalled beyond
+ * docker, which GitHub-hosted runners already have. Extracting them all into one
+ * directory and putting it first on PATH is what lets the engine find them.
+ *
+ * Re-downloaded per job (~35 MB, a couple of seconds). Callers that want it
+ * cached should wrap the step with actions/cache keyed on runner.arch.
+ */
+async function ensureScanner() {
+  const arch = process.arch === "arm64" ? "arm64" : "amd64";
+  const dir = path__WEBPACK_IMPORTED_MODULE_3__.join(process.env.RUNNER_TEMP || "/tmp", "o3-scanner");
+  const marker = path__WEBPACK_IMPORTED_MODULE_3__.join(dir, "o3-ci");
+  if (fs__WEBPACK_IMPORTED_MODULE_2__.existsSync(marker)) return dir;
+
+  fs__WEBPACK_IMPORTED_MODULE_2__.mkdirSync(dir, { recursive: true });
+  const url = `${SCANNER_RELEASE}/o3-ci_linux_${arch}.tar.gz`;
+  _actions_core__WEBPACK_IMPORTED_MODULE_0__.info(`Fetching scanner bundle (${arch})…`);
+
+  const res = await (0,undici__WEBPACK_IMPORTED_MODULE_4__/* .request */ .Em)(url, { maxRedirections: 5 });
+  if (res.statusCode !== 200) {
+    throw new Error(`Failed to download scanner bundle: HTTP ${res.statusCode} from ${url}`);
+  }
+  const tarPath = path__WEBPACK_IMPORTED_MODULE_3__.join(dir, "bundle.tar.gz");
+  fs__WEBPACK_IMPORTED_MODULE_2__.writeFileSync(tarPath, Buffer.from(await res.body.arrayBuffer()));
+  await _actions_exec__WEBPACK_IMPORTED_MODULE_1__.exec("tar", ["-xzf", tarPath, "-C", dir]);
+  fs__WEBPACK_IMPORTED_MODULE_2__.unlinkSync(tarPath);
+
+  for (const tool of ["o3-ci", "osv-scanner", "gitleaks"]) {
+    const p = path__WEBPACK_IMPORTED_MODULE_3__.join(dir, tool);
+    if (!fs__WEBPACK_IMPORTED_MODULE_2__.existsSync(p)) throw new Error(`Scanner bundle is missing ${tool}`);
+    fs__WEBPACK_IMPORTED_MODULE_2__.chmodSync(p, 0o755);
+  }
+  _actions_core__WEBPACK_IMPORTED_MODULE_0__.info("Scanner ready: o3-ci, osv-scanner, gitleaks");
+  return dir;
+}
+
+/** Ask the platform for the policy verdict and fail the build on denials. */
+async function gate(graphqlUrl, apiKey, jobId, failOnPolicy) {
+  const policyQuery = `query($jobId: ID!) { checkJobPolicy(jobId: $jobId) { message status data } }`;
+  const policyData = await graphql(graphqlUrl, apiKey, policyQuery, { jobId });
+  const policy = policyData?.checkJobPolicy;
+  if (!policy) throw new Error("No policy verdict returned");
+
+  const denied = policy.data?.denied || [];
+  const warnings = policy.data?.warnings || [];
+  const policyStatus = policy.data?.policy_status;
+
+  _actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput("policy_status", policyStatus || (denied.length ? "FAIL" : "PASS"));
+  _actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput("denied_count", String(denied.length));
+
+  if (warnings.length > 0) {
+    _actions_core__WEBPACK_IMPORTED_MODULE_0__.warning(`Policy warnings:\n${warnings.map((w) => `- ${w.reason}`).join("\n")}`);
+  }
+
+  if (policyStatus === "NOT_EVALUATED") {
+    _actions_core__WEBPACK_IMPORTED_MODULE_0__.warning(
+      "No security policy is configured for this project's namespace — nothing was enforced. " +
+        "Add a policy in the O3 console for this gate to be meaningful."
+    );
+  }
+
+  if (denied.length > 0) {
+    const msg = `Policy denied (${denied.length}):\n${denied.map((d) => `- ${d.reason}`).join("\n")}`;
+    if (failOnPolicy) {
+      _actions_core__WEBPACK_IMPORTED_MODULE_0__.setFailed(msg);
+    } else {
+      _actions_core__WEBPACK_IMPORTED_MODULE_0__.warning(`${msg}\n(fail_on_policy is false — not failing the build)`);
+    }
+    return;
+  }
+
+  // policy_status can be FAIL while denied[] is empty on older servers that
+  // only shaped the verdict for PR jobs — treat that as a failure, not a pass,
+  // so the gate can't be silently bypassed.
+  if (policyStatus === "FAIL" && failOnPolicy) {
+    _actions_core__WEBPACK_IMPORTED_MODULE_0__.setFailed(
+      "Policy evaluation reported FAIL but returned no findings — refusing to pass. " +
+        "Update the O3 backend to a build that returns the verdict for non-PR jobs."
+    );
+    return;
+  }
+
+  _actions_core__WEBPACK_IMPORTED_MODULE_0__.info("Scan completed and passed the policy check");
+}
+
 async function run() {
   try {
     const serverUrl = _actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput("server_url").replace(/\/+$/, "");
@@ -55414,34 +55507,24 @@ async function run() {
     let jobId;
 
     if (mode === "docker") {
-      // Gate an image BEFORE it is pushed. The image was just built on this
-      // runner, so there is no registry reference to scan — `docker save` exports
-      // it to a tarball and we upload that. Same archive format the platform's
-      // own registry path produces, so the scan itself is identical.
-      if (!imageName) throw new Error('image_name is required when mode=docker');
+      // Gate an image BEFORE it is pushed: it exists only in this runner's Docker
+      // daemon, so there is nothing to pull and nothing worth uploading. Scan it
+      // here with o3-ci — the same engine the platform runs server-side, built
+      // small enough to download — and report against a job so the policy gate
+      // decides in one place.
+      if (!imageName) throw new Error("image_name is required when mode=docker");
 
-      const tarFile = `docker-image-${Math.random().toString(36).slice(2, 10)}.tar`;
-      _actions_core__WEBPACK_IMPORTED_MODULE_0__.info(`Exporting image ${imageName}…`);
-      await _actions_exec__WEBPACK_IMPORTED_MODULE_1__.exec("docker", ["save", imageName, "-o", tarFile]);
-      const sizeMb = (fs__WEBPACK_IMPORTED_MODULE_2__.statSync(tarFile).size / 1024 / 1024).toFixed(1);
-      _actions_core__WEBPACK_IMPORTED_MODULE_0__.info(`Exported ${tarFile} (${sizeMb} MB)`);
-
-      const archiveUrl = await uploadArchive(serverUrl, apiKey, tarFile, "application/x-tar");
-      fs__WEBPACK_IMPORTED_MODULE_2__.unlinkSync(tarFile);
-
-      const mutation = `mutation($image_uri: String, $image_archive: String, $scanTypes: [String!]) {
+      const mutation = `mutation($image_uri: String, $scanTypes: [String!]) {
         ScheduleScan(
           repoUrls: [],
           assetType: "containerImage",
           image_uri: $image_uri,
-          image_archive: $image_archive,
           scanTypes: $scanTypes,
           via: "cli"
         ) { message status data }
       }`;
       const data = await graphql(graphqlUrl, apiKey, mutation, {
         image_uri: imageName,
-        image_archive: archiveUrl,
         scanTypes,
       });
       const result = Array.isArray(data?.ScheduleScan) ? data.ScheduleScan[0] : data?.ScheduleScan;
@@ -55451,6 +55534,25 @@ async function run() {
       // This branch returns the job id as a bare string; the source path returns
       // an object. Accept both so one reader works for either.
       jobId = typeof result.data === "string" ? result.data : result.data?._id;
+      if (!jobId) throw new Error("No jobId returned from the API");
+      _actions_core__WEBPACK_IMPORTED_MODULE_0__.info(`Scan job: ${jobId}`);
+      _actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput("job_id", jobId);
+
+      const scannerDir = await ensureScanner();
+      // The scan uploads its own findings, so there is no job to poll — go
+      // straight to the verdict once it returns.
+      await _actions_exec__WEBPACK_IMPORTED_MODULE_1__.exec(path__WEBPACK_IMPORTED_MODULE_3__.join(scannerDir, "o3-ci"), [
+        "--job-id", jobId,
+        "--image", imageName,
+        "--path", _actions_core__WEBPACK_IMPORTED_MODULE_0__.getInput("folder") || ".",
+        "--server-url", graphqlUrl,
+        "--api-key", apiKey,
+        "--scan-types", scanTypes.join(","),
+        ...(process.env.GITHUB_REF_NAME ? ["--branch", process.env.GITHUB_REF_NAME] : []),
+        ...(process.env.GITHUB_SHA ? ["--commit-sha", process.env.GITHUB_SHA] : []),
+      ], { env: { ...process.env, PATH: `${scannerDir}:${process.env.PATH}` } });
+
+      return await gate(graphqlUrl, apiKey, jobId, failOnPolicy);
     } else if (imageUri) {
       // Container-image scan: the registry is the source of truth, so there are
       // no bytes to upload — the platform pulls the image itself.
@@ -55521,51 +55623,7 @@ async function run() {
       return;
     }
 
-    const policyQuery = `query($jobId: ID!) { checkJobPolicy(jobId: $jobId) { message status data } }`;
-    const policyData = await graphql(graphqlUrl, apiKey, policyQuery, { jobId });
-    const policy = policyData?.checkJobPolicy;
-    if (!policy) throw new Error("No policy verdict returned");
-
-    const denied = policy.data?.denied || [];
-    const warnings = policy.data?.warnings || [];
-    const policyStatus = policy.data?.policy_status;
-
-    _actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput("policy_status", policyStatus || (denied.length ? "FAIL" : "PASS"));
-    _actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput("denied_count", String(denied.length));
-
-    if (warnings.length > 0) {
-      _actions_core__WEBPACK_IMPORTED_MODULE_0__.warning(`Policy warnings:\n${warnings.map((w) => `- ${w.reason}`).join("\n")}`);
-    }
-
-    if (policyStatus === "NOT_EVALUATED") {
-      _actions_core__WEBPACK_IMPORTED_MODULE_0__.warning(
-        "No security policy is configured for this project's namespace — nothing was enforced. " +
-          "Add a policy in the O3 console for this gate to be meaningful."
-      );
-    }
-
-    if (denied.length > 0) {
-      const msg = `Policy denied (${denied.length}):\n${denied.map((d) => `- ${d.reason}`).join("\n")}`;
-      if (failOnPolicy) {
-        _actions_core__WEBPACK_IMPORTED_MODULE_0__.setFailed(msg);
-      } else {
-        _actions_core__WEBPACK_IMPORTED_MODULE_0__.warning(`${msg}\n(fail_on_policy is false — not failing the build)`);
-      }
-      return;
-    }
-
-    // policy_status can be FAIL while denied[] is empty on older servers that
-    // only shaped the verdict for PR jobs — treat that as a failure, not a pass,
-    // so the gate can't be silently bypassed.
-    if (policyStatus === "FAIL" && failOnPolicy) {
-      _actions_core__WEBPACK_IMPORTED_MODULE_0__.setFailed(
-        "Policy evaluation reported FAIL but returned no findings — refusing to pass. " +
-          "Update the O3 backend to a build that returns the verdict for non-PR jobs."
-      );
-      return;
-    }
-
-    _actions_core__WEBPACK_IMPORTED_MODULE_0__.info("Scan completed and passed the policy check");
+    return await gate(graphqlUrl, apiKey, jobId, failOnPolicy);
   } catch (error) {
     _actions_core__WEBPACK_IMPORTED_MODULE_0__.setFailed(error.message);
   }
