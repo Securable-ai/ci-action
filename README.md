@@ -50,13 +50,16 @@ inherited from a base image. Your organisation's custom and disabled secret rule
 
 ## Speed
 
-Measured on an 877 MB `node:12`-based image, `ubuntu-latest`:
+Measured on `ubuntu-latest`, two images:
 
-| | |
-|---|---|
-| Scanner download (~30 MB) | ~1s |
-| Scan (SCA + secrets) | ~64s |
-| **Whole job**, including `docker build` | **~109s** |
+| | 877 MB `node:12` | 899 MB `node:16` |
+|---|---|---|
+| Scanner download (~30 MB) | ~1s | ~1s |
+| Scan (SCA + secrets) | 62s | 158s |
+| **Whole job**, incl. `docker build` | **~95s** | **~210s** |
+
+Scan time tracks the number of packages, not image size: the second image carries
+74 application manifests against the first's one, so enrichment does far more work.
 
 The scan engine ships as a ~4.9 GB image server-side; this runs the same engine from a ~30 MB
 bundle, so a runner can fetch it in about a second.
@@ -73,9 +76,12 @@ bundle, so a runner can fetch it in about a second.
 | `server_url` | no | `https://api.o3.security` | API base URL. |
 | `fail_on_policy` | no | `true` | `false` reports without blocking. |
 | `registry_id` | no | — | Registry connection id, for a private `image_uri`. |
+| `folder` | no | `.` | Directory scanned for secrets; also the source root with `repo_url`. |
 | `timeout_minutes` | no | `20` | Upper bound before the step fails. |
 
-One input selects what gets scanned — there is no mode to set.
+One input selects what gets scanned — there is no mode to set. `mode` is still
+accepted for workflows written against the previous release, but it selects
+nothing the inputs above do not.
 
 ## Outputs
 
@@ -98,6 +104,10 @@ finding metadata: package names and versions, CVE ids, and the path plus rule id
 secret.
 
 `linux/amd64` and `linux/arm64` are both supported; the architecture is detected automatically.
+
+The bundle carries the secret-detection ruleset alongside the binaries, so the runner
+needs no rule assets of its own. A bundle missing it fails the step rather than
+scanning with an empty ruleset — which would report zero secrets and look like a pass.
 
 ## Documentation
 
